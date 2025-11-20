@@ -41,5 +41,6 @@ except ImportError as e:
 # * pip install FastGeodis --no-build-isolation --no-cache-dir
 try:
     from .fastnsf import FastNSF
+    from .floxels import Floxels
 except ImportError:
     print("--- WARNING [model]: FastNSF is not imported, as it requires FastGeodis lib which is not installed.")
