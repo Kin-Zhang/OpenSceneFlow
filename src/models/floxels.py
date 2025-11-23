@@ -46,7 +46,7 @@ def cluster_loss(flow, clusters):
     cluster_means = cluster_sums / cluster_counts
 
     mean_expanded = cluster_means[indices]
-    l2_loss_per_point = torch.abs(flow - mean_expanded).norm(dim=1)
+    l2_loss_per_point = (flow - mean_expanded).norm(dim=1)
     return l2_loss_per_point
 
 
@@ -106,7 +106,7 @@ class DT:
 class Floxels(nn.Module):
     # default parameters from Sec 3.1
     def __init__(self, grid_factor=10., itr_num=500, lr=0.05, min_delta=0.01, early_patience=250,
-                 verbose=False, point_cloud_range = [-51.2, -51.2, -3, 51.2, 51.2, 3], init_weight = True):
+                 verbose=False, point_cloud_range = [-51.2, -51.2, -3, 51.2, 51.2, 3]):
         super().__init__()
         
 
@@ -119,7 +119,6 @@ class Floxels(nn.Module):
         self.point_cloud_range = point_cloud_range
         self.timer = dztimer.Timing()
         self.timer.start("Floxels Model Inference")
-        self.init_weight = init_weight
         print(f"\n---LOG [model]: Floxels setup itr_num: {itr_num}, lr: {lr}, early_patience: {early_patience}.")
             
     def optimize(self, dict2loss):
@@ -155,8 +154,8 @@ class Floxels(nn.Module):
         if 'pch1' in dict2loss:
             pch_min = torch.min(pch.squeeze(0), 0)[0]
             pch_max = torch.max(pch.squeeze(0), 0)[0]
-            xmin_int_h, ymin_int_h, zmin_int_h = torch.floor(torch.where(pc0_min<pch_min, pc0_min, pch_min) * self.grid_factor-1) / self.grid_factor
-            xmax_int_h, ymax_int_h, zmax_int_h = torch.ceil(torch.where(pc0_max>pch_max, pc0_max, pch_max)* self.grid_factor+1) / self.grid_factor
+            xmin_int_h, ymin_int_h, zmin_int_h = torch.floor(torch.min(pc1_min, pch_min) * self.grid_factor-1) / self.grid_factor
+            xmax_int_h, ymax_int_h, zmax_int_h = torch.ceil(torch.max(pc1_max, pch_max)* self.grid_factor+1) / self.grid_factor
             dt_h = DT(pch.clone().squeeze(0).to(device), (xmin_int_h, ymin_int_h, zmin_int_h), (xmax_int_h, ymax_int_h, zmax_int_h), self.grid_factor, device)
 
         params = net.parameters()

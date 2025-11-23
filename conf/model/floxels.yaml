@@ -6,7 +6,6 @@ target:
   lr: 0.05
   min_delta: 1e-2
   grid_factor: 6
-  init_weight: True
   early_patience: 30 # default is 10, set 30 to get better results
   point_cloud_range: [-51.2, -51.2, -3, 51.2, 51.2, 3]
 
