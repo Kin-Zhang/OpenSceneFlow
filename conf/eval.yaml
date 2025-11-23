@@ -9,7 +9,7 @@ supervised_flag: True # [True, False], whether you use any label from the datase
 
 # no need to change
 save_res_path: 
-num_frames: 2
+num_frames: 3
 slurm_id: 00000
 output: ${model.name}-${slurm_id}
 gpus: 1
