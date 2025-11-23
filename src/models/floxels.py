@@ -16,11 +16,39 @@
 import dztimer, torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sklearn.cluster import DBSCAN
 
 import FastGeodis # extra package
 
 from .basic.nsfp_module import VoxelGrid, EarlyStopping
 from .basic import cal_pose0to1
+
+
+def cluster(pc, min_samples=4, eps=0.5):
+    pc_np = pc.detach().to("cpu").numpy()
+
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    dbscan.fit(pc_np)
+
+    clusters = dbscan.labels_
+    clusters = torch.Tensor(clusters).int().to(pc.device)
+    return clusters
+
+
+def cluster_loss(flow, clusters):
+    clusters_unique, indices = torch.unique(clusters, return_inverse=True)
+    cluster_sums = torch.zeros((clusters_unique.shape[0], 3), device=flow.device)
+    cluster_counts = torch.zeros((clusters_unique.shape[0], 1), device=flow.device)
+    
+    cluster_sums.scatter_add_(0, indices[:, None].expand(-1, 3), flow)
+    cluster_counts.scatter_add_(0, indices[:, None], torch.ones_like(flow[:, :1]))
+
+    cluster_means = cluster_sums / cluster_counts
+
+    mean_expanded = cluster_means[indices]
+    l2_loss_per_point = (flow - mean_expanded).norm(dim=1)
+    return l2_loss_per_point
+
 
 class DT:
     def __init__(self, pts, pmin, pmax, grid_factor, device='cuda:0'):
@@ -78,7 +106,7 @@ class DT:
 class Floxels(nn.Module):
     # default parameters from Sec 3.1
     def __init__(self, grid_factor=10., itr_num=500, lr=0.05, min_delta=0.01, early_patience=250,
-                 verbose=False, point_cloud_range = [-51.2, -51.2, -3, 51.2, 51.2, 3], init_weight = True):
+                 verbose=False, point_cloud_range = [-51.2, -51.2, -3, 51.2, 51.2, 3]):
         super().__init__()
         
 
@@ -91,7 +119,6 @@ class Floxels(nn.Module):
         self.point_cloud_range = point_cloud_range
         self.timer = dztimer.Timing()
         self.timer.start("Floxels Model Inference")
-        self.init_weight = init_weight
         print(f"\n---LOG [model]: Floxels setup itr_num: {itr_num}, lr: {lr}, early_patience: {early_patience}.")
             
     def optimize(self, dict2loss):
@@ -101,25 +128,36 @@ class Floxels(nn.Module):
         self.timer[5].start("Network Initialization")
         net = VoxelGrid()
         net = net.to(device)
-        if self.init_weight:
-            net.init_weights()
+
         net.train()
         self.timer[5].stop()
 
         pc0 = dict2loss['pc0']
         pc1 = dict2loss['pc1']
+        if 'pch1' in dict2loss:
+            pch = dict2loss['pch1']
+            
+        clusters = cluster(pc0)
 
-        pc1_min = torch.min(pc0.squeeze(0), 0)[0]
-        pc2_min = torch.min(pc1.squeeze(0), 0)[0]
-        pc1_max = torch.max(pc0.squeeze(0), 0)[0]
-        pc2_max = torch.max(pc1.squeeze(0), 0)[0]
+        pc0_min = torch.min(pc0.squeeze(0), 0)[0]
+        pc1_min = torch.min(pc1.squeeze(0), 0)[0]
+        pc0_max = torch.max(pc0.squeeze(0), 0)[0]
+        pc1_max = torch.max(pc1.squeeze(0), 0)[0]
         
-        xmin_int, ymin_int, zmin_int = torch.floor(torch.where(pc1_min<pc2_min, pc1_min, pc2_min) * self.grid_factor-1) / self.grid_factor
-        xmax_int, ymax_int, zmax_int = torch.ceil(torch.where(pc1_max>pc2_max, pc1_max, pc2_max)* self.grid_factor+1) / self.grid_factor
+        xmin_int, ymin_int, zmin_int = torch.floor(torch.where(pc0_min<pc1_min, pc0_min, pc1_min) * self.grid_factor-1) / self.grid_factor
+        xmax_int, ymax_int, zmax_int = torch.ceil(torch.where(pc0_max>pc1_max, pc0_max, pc1_max)* self.grid_factor+1) / self.grid_factor
         # print('xmin: {}, xmax: {}, ymin: {}, ymax: {}, zmin: {}, zmax: {}'.format(xmin_int, xmax_int, ymin_int, ymax_int, zmin_int, zmax_int))
         
         # NOTE: build DT map
         dt = DT(pc1.clone().squeeze(0).to(device), (xmin_int, ymin_int, zmin_int), (xmax_int, ymax_int, zmax_int), self.grid_factor, device)
+
+        if 'pch1' in dict2loss:
+            pch_min = torch.min(pch.squeeze(0), 0)[0]
+            pch_max = torch.max(pch.squeeze(0), 0)[0]
+            xmin_int_h, ymin_int_h, zmin_int_h = torch.floor(torch.min(pc1_min, pch_min) * self.grid_factor-1) / self.grid_factor
+            xmax_int_h, ymax_int_h, zmax_int_h = torch.ceil(torch.max(pc1_max, pch_max)* self.grid_factor+1) / self.grid_factor
+            dt_h = DT(pch.clone().squeeze(0).to(device), (xmin_int_h, ymin_int_h, zmin_int_h), (xmax_int_h, ymax_int_h, zmax_int_h), self.grid_factor, device)
+
         params = net.parameters()
         best_forward = {'loss': torch.inf}
 
@@ -138,6 +176,16 @@ class Floxels(nn.Module):
 
             self.timer[2].start("loss")
             loss = dt.torch_bilinear_distance(pc0_to_pc1.squeeze(0)).mean()
+            if 'pch1' in dict2loss:
+                pch_to_pc0 = pc0 - forward_flow
+                loss *= 0.5
+                loss += dt_h.torch_bilinear_distance(pch_to_pc0.squeeze(0)).mean() * 0.5
+            cl_loss = cluster_loss(
+                forward_flow[clusters >= 0],
+                clusters[clusters >= 0]
+            )
+            loss += cl_loss.mean() * 0.6
+
             self.timer[2].stop()
 
             if loss <= best_forward['loss']:
@@ -178,8 +226,16 @@ class Floxels(nn.Module):
             self.timer[0].start("Data Processing")
             pc0 = batch["pc0"][batch_id]
             pc1 = batch["pc1"][batch_id]
+            if "pch1" in batch:
+                pch = batch["pch1"][batch_id]
+                selected_pch, rmh = self.range_limit_(pch)
+                pose_hto1 = cal_pose0to1(batch["poseh1"][batch_id], batch["pose1"][batch_id])
+                transform_pch = selected_pch @ pose_hto1[:3, :3].T + pose_hto1[:3, 3]
+            
+
             selected_pc0, rm0 = self.range_limit_(pc0)
             selected_pc1, rm1 = self.range_limit_(pc1)
+            
             self.timer[0][0].start("pose")
             if 'ego_motion' in batch:
                 pose_0to1 = batch['ego_motion'][batch_id]
@@ -200,8 +256,11 @@ class Floxels(nn.Module):
                 with torch.enable_grad():
                     dict2loss = {
                         'pc0': transform_pc0.clone().detach(), #.requires_grad_(True),
-                        'pc1': selected_pc1.clone().detach() #.requires_grad_(True)
+                        'pc1': selected_pc1.clone().detach(), #.requires_grad_(True)
                     }
+                    if "pch1" in batch:
+                        dict2loss["pch1"] = transform_pch.clone().detach()
+
                     model_res = self.optimize(dict2loss)
             
             final_flow = torch.zeros_like(pc0)
