@@ -140,13 +140,13 @@ class Floxels(nn.Module):
             
         clusters = cluster(pc0)
 
-        pc1_min = torch.min(pc0.squeeze(0), 0)[0]
-        pc2_min = torch.min(pc1.squeeze(0), 0)[0]
-        pc1_max = torch.max(pc0.squeeze(0), 0)[0]
-        pc2_max = torch.max(pc1.squeeze(0), 0)[0]
+        pc0_min = torch.min(pc0.squeeze(0), 0)[0]
+        pc1_min = torch.min(pc1.squeeze(0), 0)[0]
+        pc0_max = torch.max(pc0.squeeze(0), 0)[0]
+        pc1_max = torch.max(pc1.squeeze(0), 0)[0]
         
-        xmin_int, ymin_int, zmin_int = torch.floor(torch.where(pc1_min<pc2_min, pc1_min, pc2_min) * self.grid_factor-1) / self.grid_factor
-        xmax_int, ymax_int, zmax_int = torch.ceil(torch.where(pc1_max>pc2_max, pc1_max, pc2_max)* self.grid_factor+1) / self.grid_factor
+        xmin_int, ymin_int, zmin_int = torch.floor(torch.where(pc0_min<pc1_min, pc0_min, pc1_min) * self.grid_factor-1) / self.grid_factor
+        xmax_int, ymax_int, zmax_int = torch.ceil(torch.where(pc0_max>pc1_max, pc0_max, pc1_max)* self.grid_factor+1) / self.grid_factor
         # print('xmin: {}, xmax: {}, ymin: {}, ymax: {}, zmin: {}, zmax: {}'.format(xmin_int, xmax_int, ymin_int, ymax_int, zmin_int, zmax_int))
         
         # NOTE: build DT map
@@ -155,8 +155,8 @@ class Floxels(nn.Module):
         if 'pch1' in dict2loss:
             pch_min = torch.min(pch.squeeze(0), 0)[0]
             pch_max = torch.max(pch.squeeze(0), 0)[0]
-            xmin_int_h, ymin_int_h, zmin_int_h = torch.floor(torch.where(pc1_min<pch_min, pc1_min, pch_min) * self.grid_factor-1) / self.grid_factor
-            xmax_int_h, ymax_int_h, zmax_int_h = torch.ceil(torch.where(pc1_max>pch_max, pc1_max, pch_max)* self.grid_factor+1) / self.grid_factor
+            xmin_int_h, ymin_int_h, zmin_int_h = torch.floor(torch.where(pc0_min<pch_min, pc0_min, pch_min) * self.grid_factor-1) / self.grid_factor
+            xmax_int_h, ymax_int_h, zmax_int_h = torch.ceil(torch.where(pc0_max>pch_max, pc0_max, pch_max)* self.grid_factor+1) / self.grid_factor
             dt_h = DT(pch.clone().squeeze(0).to(device), (xmin_int_h, ymin_int_h, zmin_int_h), (xmax_int_h, ymax_int_h, zmax_int_h), self.grid_factor, device)
 
         params = net.parameters()
@@ -178,9 +178,9 @@ class Floxels(nn.Module):
             self.timer[2].start("loss")
             loss = dt.torch_bilinear_distance(pc0_to_pc1.squeeze(0)).mean()
             if 'pch1' in dict2loss:
-                pch_to_pc1 = pc0 - forward_flow
+                pch_to_pc0 = pc0 - forward_flow
                 loss *= 0.5
-                loss += dt_h.torch_bilinear_distance(pch_to_pc1.squeeze(0)).mean() * 0.5
+                loss += dt_h.torch_bilinear_distance(pch_to_pc0.squeeze(0)).mean() * 0.5
             cl_loss = cluster_loss(
                 forward_flow[clusters >= 0],
                 clusters[clusters >= 0]
