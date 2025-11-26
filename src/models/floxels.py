@@ -15,7 +15,7 @@
 
 import dztimer, torch
 import torch.nn as nn
-
+import numpy as np
 from sklearn.cluster import DBSCAN
 from .basic.opt_module import VoxelGrid, EarlyStopping, DT
 from .basic import wrap_batch_pcs
@@ -107,10 +107,15 @@ class Floxels(nn.Module):
         optimizer = torch.optim.Adam(params, lr=self.lr, weight_decay=0)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10, 20], gamma=0.5)
         early_stopping = EarlyStopping(patience=self.early_patience, min_delta=self.min_delta)
+        # Define lambda_gamma linear scaling parameters
+
+        # FIXME: shall we move this to paramters config.
+        epochs = np.array([0, 100])
+        weight_factor = np.array([0.1, 0.001])  # Changed from 0.01 to 0.001 as per author's spec
 
         frame_keys = sorted([key for key in dict2loss.keys() if key.startswith('pch')], reverse=False)
         self.timer[4].start("Optimization")
-        for _ in range(self.iteration_num):
+        for itr_ in range(self.iteration_num):
             optimizer.zero_grad()
             self.timer[4][1].start("Network Time")
             forward_flow = net(pc0)
@@ -134,10 +139,12 @@ class Floxels(nn.Module):
                 forward_flow[clusters >= 0],
                 clusters[clusters >= 0]
             )
-            loss += cl_loss.mean() * self.cluster_weight
+            loss += cl_loss.mean() * self.cluster_weight * (self.num_frames - 1)
 
-            # FIXME paper didn't say lambda_gamma's value.....
-            loss += (0.000005 / (time_index + 1)) * torch.norm(forward_flow, p=2)
+            loss_flownorm = torch.norm(forward_flow, p=2) * (self.num_frames - 1)
+            lambda_gamma = np.interp(itr_, epochs, weight_factor)
+
+            loss += lambda_gamma * loss_flownorm
 
             if loss <= best_forward['loss']:
                 best_forward['loss'] = loss.item()
@@ -185,9 +192,6 @@ class Floxels(nn.Module):
             pchs = {}
             for i in range(1, self.num_frames - 1):
                 pchs[f'pch{i}'] = self.range_limit_(pcs_dict[f'pch{i}s'][batch_id,...])[0]
-
-            selected_pc0, rm0 = self.range_limit_(pc0)
-            selected_pc1, rm1 = self.range_limit_(pc1)
 
             # since pl in val and test mode will disable_grad.
             with torch.inference_mode(False):
