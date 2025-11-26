@@ -23,7 +23,7 @@ import torch.nn.functional as F
 
 import FastGeodis # extra package
 
-from .basic.nsfp_module import Neural_Prior, EarlyStopping
+from .basic.opt_module import Neural_Prior, EarlyStopping
 from .basic import cal_pose0to1
 
 class DT:

@@ -1,55 +1,21 @@
 """
-This file is directly copied from: 
-https://github.com/Lilac-Lee/Neural_Scene_Flow_Prior
+# Created: 2025-11-25 09:16
+# Copyright (C) 2024-now, RPL, KTH Royal Institute of Technology
+# Author: Qingwen Zhang  (https://kin-zhang.github.io/)
+# 
+# This file is part of 
+# * TODO
+# If you find this repo helpful, please cite the respective publication as 
+# listed on the above website.
+# 
+# Description: some modules/funcs for optimization and model building.
 """
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-class Neural_Prior(torch.nn.Module):
-    def __init__(self, dim_x=3, filter_size=128, act_fn='relu', layer_size=8):
-        super().__init__()
-        self.layer_size = layer_size
-        
-        self.nn_layers = torch.nn.ModuleList([])
-        # input layer (default: xyz -> 128)
-        if layer_size >= 1:
-            self.nn_layers.append(torch.nn.Sequential(torch.nn.Linear(dim_x, filter_size)))
-            if act_fn == 'relu':
-                self.nn_layers.append(torch.nn.ReLU())
-            elif act_fn == 'sigmoid':
-                self.nn_layers.append(torch.nn.Sigmoid())
-            for _ in range(layer_size-1):
-                self.nn_layers.append(torch.nn.Sequential(torch.nn.Linear(filter_size, filter_size)))
-                if act_fn == 'relu':
-                    self.nn_layers.append(torch.nn.ReLU())
-                elif act_fn == 'sigmoid':
-                    self.nn_layers.append(torch.nn.Sigmoid())
-            self.nn_layers.append(torch.nn.Linear(filter_size, dim_x))
-        else:
-            self.nn_layers.append(torch.nn.Sequential(torch.nn.Linear(dim_x, dim_x)))
-    
-    def reset(self):
-        for layer in self.nn_layers.children():
-            if hasattr(layer, 'reset_parameters'):
-                layer.reset_parameters()
-
-    def init_weights(self):
-        for m in self.nn_layers:
-            if isinstance(m, torch.nn.Linear):
-                torch.nn.init.xavier_uniform_(m.weight)
-                m.bias.data.fill_(0.0)
-
-    def forward(self, x):
-        """ points -> features
-            [B, N, 3] -> [B, K]
-        """
-        for layer in self.nn_layers:
-            x = layer(x)
-                
-        return x
-
-
-class VoxelGrid(torch.nn.Module):
+class VoxelGrid(nn.Module):
     """
     Voxel-based scene flow representation.
     Replaces MLP with explicit 3D grid where each vertex stores flow.
@@ -187,6 +153,58 @@ class VoxelGrid(torch.nn.Module):
         flow = self._trilinear_interpolation(grid_coords)
         
         return flow
+
+"""
+This file is directly copied from: 
+https://github.com/Lilac-Lee/Neural_Scene_Flow_Prior
+"""    
+class Neural_Prior(nn.Module):
+    def __init__(self, dim_x=3, filter_size=128, act_fn='relu', layer_size=8):
+        super().__init__()
+        self.layer_size = layer_size
+        
+        self.nn_layers = nn.ModuleList([])
+        # input layer (default: xyz -> 128)
+        if layer_size >= 1:
+            self.nn_layers.append(torch.nn.Sequential(torch.nn.Linear(dim_x, filter_size)))
+            if act_fn == 'relu':
+                self.nn_layers.append(torch.nn.ReLU())
+            elif act_fn == 'sigmoid':
+                self.nn_layers.append(torch.nn.Sigmoid())
+            for _ in range(layer_size-1):
+                self.nn_layers.append(torch.nn.Sequential(torch.nn.Linear(filter_size, filter_size)))
+                if act_fn == 'relu':
+                    self.nn_layers.append(torch.nn.ReLU())
+                elif act_fn == 'sigmoid':
+                    self.nn_layers.append(torch.nn.Sigmoid())
+            self.nn_layers.append(torch.nn.Linear(filter_size, dim_x))
+        else:
+            self.nn_layers.append(torch.nn.Sequential(torch.nn.Linear(dim_x, dim_x)))
+    
+    def reset(self):
+        for layer in self.nn_layers.children():
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
+
+    def init_weights(self):
+        for m in self.nn_layers:
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.xavier_uniform_(m.weight)
+                m.bias.data.fill_(0.0)
+
+    def init_weights(m):
+        if isinstance(m, torch.nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            m.bias.data.fill_(0.0)
+            
+    def forward(self, x):
+        """ points -> features
+            [N, 3] -> [N, K] -> [N, 3]
+        """
+        for layer in self.nn_layers:
+            x = layer(x)
+                
+        return x
     
 # ANCHOR: early stopping strategy
 class EarlyStopping(object):
@@ -238,3 +256,62 @@ class EarlyStopping(object):
                 self.is_better = lambda a, best: a > best + (
                             best * min_delta / 100)
                 
+try:
+    import FastGeodis # extra package
+except:
+    print("Warning: FastGeodis package not found. Please install it for DT functionality.")
+
+class DT:
+    def __init__(self, pts, pmin, pmax, grid_factor, device='cuda:0'):
+        self.device = device
+        self.grid_factor = grid_factor
+        
+        sample_x = ((pmax[0] - pmin[0]) * grid_factor).ceil().int() + 2
+        sample_y = ((pmax[1] - pmin[1]) * grid_factor).ceil().int() + 2
+        sample_z = ((pmax[2] - pmin[2]) * grid_factor).ceil().int() + 2
+        
+        self.Vx = torch.linspace(0, sample_x, sample_x+1, device=self.device)[:-1] / grid_factor + pmin[0]
+        self.Vy = torch.linspace(0, sample_y, sample_y+1, device=self.device)[:-1] / grid_factor + pmin[1]
+        self.Vz = torch.linspace(0, sample_z, sample_z+1, device=self.device)[:-1] / grid_factor + pmin[2]
+        
+        # NOTE: build a binary image first, with 0-value occuppied points
+        grid_x, grid_y, grid_z = torch.meshgrid(self.Vx, self.Vy, self.Vz, indexing="ij")
+        self.grid = torch.stack([grid_x.unsqueeze(-1), grid_y.unsqueeze(-1), grid_z.unsqueeze(-1)], -1).float().squeeze()
+        H, W, D, _ = self.grid.size()
+        pts_mask = torch.ones(H, W, D, device=device)
+        self.pts_sample_idx_x = ((pts[:,0:1] - self.Vx[0]) * self.grid_factor).round()
+        self.pts_sample_idx_y = ((pts[:,1:2] - self.Vy[0]) * self.grid_factor).round()
+        self.pts_sample_idx_z = ((pts[:,2:3] - self.Vz[0]) * self.grid_factor).round()
+        pts_mask[self.pts_sample_idx_x.long(), self.pts_sample_idx_y.long(), self.pts_sample_idx_z.long()] = 0.
+        
+        iterations = 1
+        image_pts = torch.zeros(H, W, D, device=device).unsqueeze(0).unsqueeze(0)
+        pts_mask = pts_mask.unsqueeze(0).unsqueeze(0)
+        self.D = FastGeodis.generalised_geodesic3d(
+            image_pts, pts_mask, [1./self.grid_factor, 1./self.grid_factor, 1./self.grid_factor], 1e10, 0.0, iterations
+        ).squeeze()
+            
+    def torch_bilinear_distance(self, Y, truncate_dist=-1):
+        H, W, D = self.D.size()
+        target = self.D[None, None, ...]
+        
+        sample_x = ((Y[:,0:1] - self.Vx[0]) * self.grid_factor).clip(0, H-1)
+        sample_y = ((Y[:,1:2] - self.Vy[0]) * self.grid_factor).clip(0, W-1)
+        sample_z = ((Y[:,2:3] - self.Vz[0]) * self.grid_factor).clip(0, D-1)
+        
+        sample = torch.cat([sample_x, sample_y, sample_z], -1)
+        
+        # NOTE: normalize samples to [-1, 1]
+        sample = 2 * sample
+        sample[...,0] = sample[...,0] / (H-1)
+        sample[...,1] = sample[...,1] / (W-1)
+        sample[...,2] = sample[...,2] / (D-1)
+        sample = sample -1
+        
+        sample_ = torch.cat([sample[...,2:3], sample[...,1:2], sample[...,0:1]], -1)
+        
+        # NOTE: reshape to match 5D volumetric input
+        dist = F.grid_sample(target, sample_.view(1,-1,1,1,3), mode="bilinear", align_corners=True).view(-1)
+        if truncate_dist > 0:
+            dist = torch.clamp(dist, max=truncate_dist)
+        return dist
