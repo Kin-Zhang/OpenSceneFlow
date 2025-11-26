@@ -4,10 +4,13 @@ target:
   _target_: src.models.Floxels
   itr_num: 500
   lr: 0.05
-  min_delta: 1e-2
+  min_delta: 1e-4
   grid_factor: 6
-  early_patience: 30 # default is 10, set 30 to get better results
+  early_patience: 20 # default is 20
   point_cloud_range: [-51.2, -51.2, -3, 51.2, 51.2, 3]
-
+  voxel_size: 0.5
+  num_frames: ${num_frames}
+  cluster_weight: 0.6
+  
 val_monitor: val/Dynamic/Mean
 iter_only: True
