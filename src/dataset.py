@@ -186,7 +186,7 @@ class ToTensor(object):
 class HDF5Dataset(Dataset):
     def __init__(self, directory, \
                 transform=None, n_frames=2, ssl_label=None, \
-                eval = False, leaderboard_version=1, \
+                eval = False, leaderboard_version=1, flow_num=1, \
                 vis_name=''):
         '''
         Args:
@@ -212,7 +212,8 @@ class HDF5Dataset(Dataset):
         self.history_frames = n_frames - 2
         self.vis_name = vis_name if isinstance(vis_name, list) else [vis_name]
         self.transform = transform
-
+        self.flow_num = flow_num
+        
         if eval:
             eval_index_file = os.path.join(self.directory, 'index_eval.pkl')
             if leaderboard_version == 2:
@@ -295,7 +296,7 @@ class HDF5Dataset(Dataset):
             max_idx = self.scene_id_bounds[scene_id]["max_index"]
             min_idx = self.scene_id_bounds[scene_id]["min_index"]
 
-            max_valid_index_for_flow = max_idx - 1
+            max_valid_index_for_flow = max_idx - self.flow_num
             min_valid_index_for_flow = min_idx + self.history_frames
             index_ = max(min_valid_index_for_flow, min(max_valid_index_for_flow, index_))
         return eval_flag, index_
@@ -346,6 +347,21 @@ class HDF5Dataset(Dataset):
                     data_dict[f'pch{i+1}'] = past_pc
                     data_dict[f'gmh{i+1}'] = past_gm
                     data_dict[f'poseh{i+1}'] = past_pose
+                    
+            if self.flow_num > 1:
+                for i in range(2, self.flow_num+1):
+                    over_i = i
+                    # FIXEME check with Floxel author to confirm if there is no future frames, how they handle it?
+                    while index_ + over_i > self.scene_id_bounds[scene_id]["max_index"]:
+                        over_i -= 1
+                    future_timestamp_ = str(self.data_index[index_ + over_i][1])
+                    data_dict[f'pose{i}'] = f[future_timestamp_]['pose'][:]
+                    data_dict[f'pc{i}'] = f[future_timestamp_]['lidar'][:][:,:3]
+                    data_dict[f'gm{i}'] = f[future_timestamp_]['ground_mask'][:]
+                    for flow_key in ['flow', 'flow_is_valid', 'flow_category_indices', 'flow_instance_id']:
+                        future_timestamp_ = str(self.data_index[index_ + over_i - 1][1])
+                        if flow_key in f[future_timestamp_]:
+                            data_dict[f'{flow_key}{i-1}'] = f[future_timestamp_][flow_key][:]
 
             for data_key in self.vis_name + ['ego_motion',
                              # ground truth information:

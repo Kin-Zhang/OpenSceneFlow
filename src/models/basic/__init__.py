@@ -32,9 +32,16 @@ def cal_pose0to1(pose0: torch.Tensor, pose1: torch.Tensor):
 def wrap_batch_pcs(batch, num_frames=2):
     batch_sizes = len(batch["pose0"])
 
+    # for future frames:
+    future_frame_keys = []
+    for key_ in batch:
+        if key_.startswith('pc') and not key_.startswith('pch') and key_ not in ['pc0', 'pc1']:
+            future_frame_keys.append(key_)
+            
     pose_flows = []
     transform_pc0s = []
     transform_pc_m_frames = [[] for _ in range(num_frames - 2)]
+    transform_pc_f_frames = [[] for _ in range(len(future_frame_keys))]
     # print(batch)
     for batch_id in range(batch_sizes):
         selected_pc0 = batch["pc0"][batch_id] 
@@ -59,7 +66,14 @@ def wrap_batch_pcs(batch, num_frames=2):
             transform_pc_m = selected_pc_m @ past_poses[i-1][:3, :3].T + past_poses[i-1][:3, 3]
             transform_pc_m_frames[i-1].append(transform_pc_m)
 
+        for idx, key_ in enumerate(future_frame_keys):
+            selected_pc_f = batch[key_][batch_id]
+            future_pose = cal_pose0to1(batch[key_.replace('pc', 'pose')][batch_id], batch["pose1"][batch_id])
+            transform_pc_f = selected_pc_f @ future_pose[:3, :3].T + future_pose[:3, 3]
+            transform_pc_f_frames[idx].append(transform_pc_f)
+
     pc_m_frames = [torch.stack(transform_pc_m_frames[i], dim=0) for i in range(num_frames - 2)]
+    pc_f_frames = [torch.stack(transform_pc_f_frames[i], dim=0) for i in range(len(future_frame_keys))]
 
     pc0s = torch.stack(transform_pc0s, dim=0) 
     pc1s = batch["pc1"]
@@ -70,7 +84,9 @@ def wrap_batch_pcs(batch, num_frames=2):
     }
     for i in range(1, num_frames - 1):
         pcs_dict[f'pch{i}s'] = pc_m_frames[i-1]
-    
+    for idx, key_ in enumerate(future_frame_keys):
+        pcs_dict[f'{key_}s'] = pc_f_frames[idx]
+        
     return pcs_dict
 
 class ConvWithNorms(nn.Module):

@@ -1,3 +1,22 @@
+Floxels re-implementation now....
+
+Please do not run it yet, still under debugging... with Floxels author to make sure the re-implementation is correct.
+
+Run command, I think I need clean up the `num_frames` and `flow_num` logic later... It could be confusing except for me:
+
+```bash
+# for symmetric input 5 frames: 
+python eval.py model=floxels dataset_path=/home/ssd/qingwen/data/av2/h5py/demo num_frames=4 flow_num=2
+
+# for 7 frames:
+python eval.py model=floxels dataset_path=/home/ssd/qingwen/data/av2/h5py/demo num_frames=5 flow_num=3
+
+# for 13 frames
+python eval.py model=floxels dataset_path=/home/ssd/qingwen/data/av2/h5py/demo num_frames=8 flow_num=6
+```
+
+---
+
 <p align="center">
     <a href="https://github.com/KTH-RPL/OpenSceneFlow">
     <picture>

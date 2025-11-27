@@ -115,6 +115,7 @@ class InferenceRunner:
 
         dataset = HDF5Dataset(dataset_path,
                               n_frames=self.cfg.num_frames,
+                              flow_num=self.cfg.flow_num,
                               eval=is_eval_mode,
                               leaderboard_version=self.cfg.leaderboard_version if 'leaderboard_version' in self.cfg else 1)
 

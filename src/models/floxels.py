@@ -48,7 +48,7 @@ def cluster_loss(flow, clusters):
 class Floxels(nn.Module):
     # default parameters from Sec 3.1
     def __init__(self, grid_factor=10., itr_num=500, lr=0.05, min_delta=0.01, early_patience=250,
-                 verbose=False, point_cloud_range = [-51.2, -51.2, -3, 51.2, 51.2, 3], voxel_size=0.5, num_frames=3,
+                 verbose=False, point_cloud_range = [-51.2, -51.2, -3, 51.2, 51.2, 3], voxel_size=0.5, num_frames=3, flow_num=1,
                  cluster_weight=0.6):
         super().__init__()
 
@@ -60,13 +60,15 @@ class Floxels(nn.Module):
         self.verbose = verbose
         self.point_cloud_range = point_cloud_range
         self.voxel_size = voxel_size
+        # FIXME later, as I messed up frames num here I think....
         self.num_frames = num_frames
+        self.flow_num = flow_num
 
         self.cluster_weight = cluster_weight
 
         self.timer = dztimer.Timing()
         self.timer.start("Floxels Model Inference")
-        print(f"\n---LOG [model]: Floxels setup num_frame: {num_frames}, itr_num: {itr_num}, lr: {lr}, early_patience: {early_patience} with min_delta: {min_delta}.")
+        print(f"\n---LOG [model]: Floxels setup total frames: {num_frames+flow_num-1}, itr_num: {itr_num}, lr: {lr}, early_patience: {early_patience} with min_delta: {min_delta}.")
             
     def optimize(self, dict2loss):
         device = dict2loss['pc0'].device
@@ -111,9 +113,11 @@ class Floxels(nn.Module):
 
         # FIXME: shall we move this to paramters config.
         epochs = np.array([0, 100])
-        weight_factor = np.array([0.1, 0.001])  # Changed from 0.01 to 0.001 as per author's spec
+        weight_factor = np.array([0.1, 0.01])  # Changed from 0.01 to 0.01 as per author's spec
 
         frame_keys = sorted([key for key in dict2loss.keys() if key.startswith('pch')], reverse=False)
+        frame_future_keys = sorted([key for key in dict2loss.keys() if (key.startswith('pc') and not key.startswith('pch'))], reverse=False)
+
         self.timer[4].start("Optimization")
         for itr_ in range(self.iteration_num):
             optimizer.zero_grad()
@@ -122,7 +126,14 @@ class Floxels(nn.Module):
             self.timer[4][1].stop()
 
             self.timer[4][2].start("loss")
-            loss = dt_dict['pc1'].torch_bilinear_distance((pc0 + forward_flow).squeeze(0), truncate_dist=5.0).mean()
+            loss = 0
+
+            # loss = dt_dict['pc1'].torch_bilinear_distance((pc0 + forward_flow).squeeze(0), truncate_dist=5.0).mean()
+            for time_index, frame_key in enumerate(frame_future_keys):
+                dt = dt_dict[frame_key]
+                pesudo_pc = pc0 + (time_index + 1) * forward_flow
+                # since time_index starts from 0
+                loss += dt.torch_bilinear_distance(pesudo_pc.squeeze(0), truncate_dist=5.0).mean() * pow(1/(time_index+1), 2)
 
             # (0, 'pch1s'), (1, 'pch2s'), ...
             for time_index, frame_key in enumerate(reversed(frame_keys)):
@@ -134,16 +145,17 @@ class Floxels(nn.Module):
 
             # FIXME: lambda_d weight didn't specify before. 
             # loss *= lambda_d # ? ask Hanqiu later
-            
+            total_num_frames = self.num_frames + self.flow_num - 1
             cl_loss = cluster_loss(
                 forward_flow[clusters >= 0],
                 clusters[clusters >= 0]
             )
-            loss += cl_loss.mean() * self.cluster_weight * (self.num_frames - 1)
+            loss += cl_loss.mean() * self.cluster_weight * (total_num_frames - 1)
 
-            loss_flownorm = torch.norm(forward_flow, p=2) * (self.num_frames - 1)
+            loss_flownorm = torch.norm(forward_flow, p=2) * (total_num_frames - 1)
             lambda_gamma = np.interp(itr_, epochs, weight_factor)
 
+            # FIXME: check with author about this weight. since it's not work.... 
             loss += lambda_gamma * loss_flownorm
 
             if loss <= best_forward['loss']:
@@ -188,10 +200,13 @@ class Floxels(nn.Module):
             pc0 = pcs_dict["pc0s"][batch_id,...]
             pc1 = pcs_dict["pc1s"][batch_id,...]
             selected_pc0, rm0 = self.range_limit_(pc0)
-            selected_pc1, rm1 = self.range_limit_(pc1)
-            pchs = {}
+            selected_pc1 = self.range_limit_(pc1)[0]
+            pchs, pcs = {}, {}
             for i in range(1, self.num_frames - 1):
                 pchs[f'pch{i}'] = self.range_limit_(pcs_dict[f'pch{i}s'][batch_id,...])[0]
+
+            for i in range(2, self.flow_num + 1):
+                pcs[f'pc{i}'] = self.range_limit_(pcs_dict[f'pc{i}s'][batch_id,...])[0]
 
             # since pl in val and test mode will disable_grad.
             with torch.inference_mode(False):
@@ -201,6 +216,7 @@ class Floxels(nn.Module):
                         'pc1': selected_pc1.clone().detach(), #.requires_grad_(True)
                     }
                     dict2loss.update(pchs)
+                    dict2loss.update(pcs)
                     model_res = self.optimize(dict2loss)
             
             final_flow = torch.zeros_like(pc0)

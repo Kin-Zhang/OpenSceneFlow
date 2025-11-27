@@ -1,6 +1,6 @@
 
-dataset_path: /home/kin/data/av2/h5py/sensor
-checkpoint: /home/kin/data/model_zoo/deltaflow_public/deltaflow-av2.ckpt
+dataset_path: /home/ssd/qingwen/data/av2/h5py/demo/
+checkpoint: 
 data_mode: val # [val, test]
 save_res: False # [True, False]
 
@@ -9,7 +9,8 @@ supervised_flag: True # [True, False], whether you use any label from the datase
 
 # no need to change
 save_res_path: 
-num_frames: 3
+num_frames: 4
+flow_num: 2 # default is 1; pc0->pc1; flow_num=3 means we will have pc1 -> pc2 -> pc3
 slurm_id: 00000
 output: ${model.name}-${slurm_id}
 gpus: 1
@@ -18,4 +19,4 @@ eval_only: True
 wandb_mode: disabled # [offline, disabled, online]
 defaults:
   - hydra: default
-  - model: deflow
+  - model: floxels
