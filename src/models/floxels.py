@@ -88,6 +88,13 @@ class Floxels(nn.Module):
         dt_dict = {}
         for key_ in dict2loss.keys():
             pc_aim = dict2loss[key_]
+
+            # save for a check:
+            # import open3d as o3d
+            # pcd = o3d.geometry.PointCloud()
+            # pcd.points = o3d.utility.Vector3dVector(pc_aim.squeeze(0).cpu().numpy())
+            # o3d.io.write_point_cloud(f'{key_}.ply', pcd)
+
             pc2_min = torch.min(pc_aim.squeeze(0), 0)[0]
             pc2_max = torch.max(pc_aim.squeeze(0), 0)[0]
             
@@ -97,6 +104,7 @@ class Floxels(nn.Module):
             
             # NOTE: build DT map
             dt_dict[key_] = DT(pc_aim.clone().squeeze(0).to(device), (xmin_int, ymin_int, zmin_int), (xmax_int, ymax_int, zmax_int), self.grid_factor, device)
+        # exit()
         self.timer[2].stop()
 
         self.timer[3].start("Clustering")
@@ -113,7 +121,7 @@ class Floxels(nn.Module):
 
         # FIXME: shall we move this to paramters config.
         epochs = np.array([0, 100])
-        weight_factor = np.array([0.1, 0.01])  # Changed from 0.01 to 0.01 as per author's spec
+        weight_factor = np.array([0.1, 0.01])  # Changed from 0.1 to 0.01 as per author's spec
 
         frame_keys = sorted([key for key in dict2loss.keys() if key.startswith('pch')], reverse=False)
         frame_future_keys = sorted([key for key in dict2loss.keys() if (key.startswith('pc') and not key.startswith('pch'))], reverse=False)
@@ -153,10 +161,9 @@ class Floxels(nn.Module):
             )
             loss += cl_loss.mean() * self.cluster_weight * (total_num_frames - 1)
 
-            loss_flownorm = torch.norm(forward_flow, p=2) * (total_num_frames - 1)
+            loss_flownorm = (total_num_frames - 1) * torch.norm(forward_flow, p=2, dim=1).mean()
             lambda_gamma = np.interp(itr_, epochs, weight_factor)
 
-            # FIXME: check with author about this weight. since it's not work.... 
             loss += lambda_gamma * loss_flownorm
 
             if loss <= best_forward['loss']:
