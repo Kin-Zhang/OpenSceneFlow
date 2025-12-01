@@ -143,8 +143,9 @@ class Floxels(nn.Module):
                 loss += dt.torch_bilinear_distance(pesudo_pc.squeeze(0), truncate_dist=5.0).mean() * pow(1/(time_index+1), 2)
             self.timer[4][2].stop()
 
-            # FIXME: lambda_d weight didn't specify before. 
-            # loss *= lambda_d # ? ask Hanqiu later
+            # NOTE: lambda_d=1 confirmed with Hanqiu
+            # loss *= lambda_d
+
             total_num_frames = self.num_frames + self.flow_num - 1
             cl_loss = cluster_loss(
                 forward_flow[clusters >= 0],

@@ -139,6 +139,11 @@ class InferenceRunner:
         batch['origin_pc0'] = batch['pc0'].clone()
         batch['pc0'] = batch['pc0'][~batch['gm0']].unsqueeze(0)
         batch['pc1'] = batch['pc1'][~batch['gm1']].unsqueeze(0)
+        for i in range(1, self.cfg.num_frames-1):
+            batch[f'pch{i}'] = batch[f'pch{i}'][~batch[f'gmh{i}']].unsqueeze(0)
+        for i in range(2, self.cfg.flow_num+1):
+            batch[f'pc{i}'] = batch[f'pc{i}'][~batch[f'gm{i}']].unsqueeze(0)
+
         self.model.timer[12].start("One Scan")
         res_dict = self.model(batch)
         self.model.timer[12].stop()
