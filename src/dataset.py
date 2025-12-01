@@ -309,7 +309,8 @@ class HDF5Dataset(Dataset):
         data_dict = {
             'scene_id': scene_id,
             'timestamp': timestamp,
-            'eval_flag': eval_flag
+            'eval_flag': eval_flag,
+            'repeat_key': []
         }
         with h5py.File(os.path.join(self.directory, f'{scene_id}.h5'), 'r') as f:
             # original data
@@ -331,7 +332,8 @@ class HDF5Dataset(Dataset):
                 for i in range(1, self.history_frames + 1):
                     frame_index = index_ - i
                     if frame_index < self.scene_id_bounds[scene_id]["min_index"]: 
-                        frame_index = self.scene_id_bounds[scene_id]["min_index"] 
+                        frame_index = self.scene_id_bounds[scene_id]["min_index"]
+                        data_dict['repeat_key'].append(f'pch{i}')
 
                     past_timestamp = str(self.data_index[frame_index][1])
                     past_pc = f[past_timestamp]['lidar'][:][:,:3]
@@ -351,12 +353,13 @@ class HDF5Dataset(Dataset):
             if self.flow_num > 1:
                 for i in range(2, self.flow_num+1):
                     over_i = i
-                    # FIXEME check with Floxel author to confirm if there is no future frames, how they handle it?
+                    # NOTE: append the last frame if out of bound, but record the repeat_key for removal later if some algo needed.
                     while index_ + over_i > self.scene_id_bounds[scene_id]["max_index"]:
                         over_i -= 1
+                        data_dict['repeat_key'].append(f'pc{i}')
                     future_timestamp_ = str(self.data_index[index_ + over_i][1])
                     data_dict[f'pose{i}'] = f[future_timestamp_]['pose'][:]
-                    data_dict[f'pc{i}'] = f[future_timestamp_]['lidar'][:][:,:3]
+                    data_dict[f'pc{i}'] = f[future_timestamp_]['lidar'][:][:, :3]
                     data_dict[f'gm{i}'] = f[future_timestamp_]['ground_mask'][:]
                     for flow_key in ['flow', 'flow_is_valid', 'flow_category_indices', 'flow_instance_id']:
                         future_timestamp_ = str(self.data_index[index_ + over_i - 1][1])

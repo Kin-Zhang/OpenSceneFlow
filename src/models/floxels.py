@@ -200,7 +200,33 @@ class Floxels(nn.Module):
     def forward(self, batch):
         batch_sizes = len(batch["pose0"])
         self.timer[0].start("Data Preprocess")
-        pcs_dict = wrap_batch_pcs(batch, num_frames=self.num_frames)
+        pcs_dict = wrap_batch_pcs(batch, num_frames=self.num_frames, remove_repeat=True)
+        
+        if pcs_dict['num_frames'] != self.num_frames or (pcs_dict['num_future_frames'] + 1) != self.flow_num:
+            self.flow_num = max(self.num_frames - 2, 1)
+            new_num_frames = pcs_dict['num_frames']
+            new_flow_num = pcs_dict['num_future_frames'] + 1
+            
+            # Calculate expected flow_num based on num_frames
+            expected_flow_num = max(new_num_frames - 2, 1)
+            
+            # Align based on which one needs adjustment
+            if new_flow_num < expected_flow_num:
+                # flow_num is reduced, align num_frames down
+                self.num_frames = min(max(new_flow_num + 2, 3), 8)
+                self.flow_num = new_flow_num
+            else:
+                # num_frames might be reduced or both are misaligned
+                self.num_frames = min(max(new_num_frames, 3), 8)
+                self.flow_num = max(self.num_frames - 2, 1)
+            
+            # Ensure valid range
+            self.num_frames = max(min(self.num_frames, 8), 3)
+            self.flow_num = max(min(self.flow_num, 6), 1)
+            
+            # debug print for a check.
+            # print(f"Configuration aligned: num_frames {new_num_frames}->{self.num_frames}, flow_num {new_flow_num}->{self.flow_num}")
+            
         self.timer[0].stop()
 
         batch_final_flow = []

@@ -29,15 +29,20 @@ def cal_pose0to1(pose0: torch.Tensor, pose1: torch.Tensor):
     pose_0to1 = pose1_inv @ pose0.type(torch.float64)
     return pose_0to1.type(torch.float32)
 
-def wrap_batch_pcs(batch, num_frames=2):
+def wrap_batch_pcs(batch, num_frames=2, remove_repeat=False):
     batch_sizes = len(batch["pose0"])
+    if remove_repeat and 'repeat_key' in batch and len(batch['repeat_key']) > 0:
+        for keys in batch['repeat_key']:
+            batch.pop(keys[0], None) # 0 for the batch dimension
 
     # for future frames:
     future_frame_keys = []
+    num_frames = 2 # at least we will have pc0 and pc1
     for key_ in batch:
         if key_.startswith('pc') and not key_.startswith('pch') and key_ not in ['pc0', 'pc1']:
             future_frame_keys.append(key_)
-            
+        if key_.startswith('pch'):
+            num_frames += 1
     pose_flows = []
     transform_pc0s = []
     transform_pc_m_frames = [[] for _ in range(num_frames - 2)]
@@ -62,16 +67,21 @@ def wrap_batch_pcs(batch, num_frames=2):
         transform_pc0s.append(transform_pc0)
 
         for i in range(1, num_frames - 1):
+            if f'pch{i}' not in batch and remove_repeat:
+                continue
             selected_pc_m = batch[f"pch{i}"][batch_id]
             transform_pc_m = selected_pc_m @ past_poses[i-1][:3, :3].T + past_poses[i-1][:3, 3]
             transform_pc_m_frames[i-1].append(transform_pc_m)
 
         for idx, key_ in enumerate(future_frame_keys):
+            if key_ not in batch and remove_repeat:
+                continue
             selected_pc_f = batch[key_][batch_id]
             future_pose = cal_pose0to1(batch[key_.replace('pc', 'pose')][batch_id], batch["pose1"][batch_id])
             transform_pc_f = selected_pc_f @ future_pose[:3, :3].T + future_pose[:3, 3]
             transform_pc_f_frames[idx].append(transform_pc_f)
 
+    num_frames = len(transform_pc_m_frames) + 2
     pc_m_frames = [torch.stack(transform_pc_m_frames[i], dim=0) for i in range(num_frames - 2)]
     pc_f_frames = [torch.stack(transform_pc_f_frames[i], dim=0) for i in range(len(future_frame_keys))]
 
@@ -80,6 +90,8 @@ def wrap_batch_pcs(batch, num_frames=2):
     pcs_dict = {
         'pc0s': pc0s,
         'pc1s': pc1s,
+        'num_frames': num_frames,
+        'num_future_frames': len(future_frame_keys),
         'pose_flows': pose_flows
     }
     for i in range(1, num_frames - 1):

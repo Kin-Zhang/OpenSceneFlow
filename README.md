@@ -5,6 +5,9 @@ Please do not run it yet, still under debugging... with Floxels author to make s
 Run command, I think I need clean up the `num_frames` and `flow_num` logic later... It could be confusing except for me:
 
 ```bash
+# 3 frames:
+python eval.py model=floxels dataset_path=/home/ssd/qingwen/data/av2/h5py/demo num_frames=3 flow_num=1
+
 # for symmetric input 5 frames: 
 python eval.py model=floxels dataset_path=/home/ssd/qingwen/data/av2/h5py/demo num_frames=4 flow_num=2
 
