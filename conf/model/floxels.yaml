@@ -7,7 +7,7 @@ target:
   min_delta: 1e-4
   grid_factor: 6
   early_patience: 20 # default is 20
-  point_cloud_range: [-51.2, -51.2, -3, 51.2, 51.2, 3]
+  point_cloud_range: [-80, -80, -3, 80, 80, 3]
   voxel_size: 0.5
   num_frames: ${num_frames}
   flow_num: ${flow_num}
