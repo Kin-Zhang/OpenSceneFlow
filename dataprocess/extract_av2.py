@@ -79,8 +79,13 @@ def create_eval_mask(data_mode: str, output_dir_: Path, mask_dir: str):
                 if key not in f.keys():
                     print(f'{scene_id}/{key} not found')
                     continue
-                group = f[key]
                 mask = pd.read_feather(Path(mask_dir) / f"{data_mode}-masks" / scene_id / f"{key}.feather").to_numpy().astype(bool)
+                group = f[key]
+                # NOTE(2026-01-12): Hanqiu found out some frames masks have ground points, need remove them
+                if 'ground_mask' in group:
+                    ground_mask = f[key]['ground_mask'][:]
+                    mask = mask.reshape(-1).astype(bool) & (~ground_mask.reshape(-1).astype(bool))
+
                 group.create_dataset('eval_mask', data=mask)
                 data_index.append([scene_id, key])
 
@@ -319,13 +324,12 @@ def main(
     nproc: int = (multiprocessing.cpu_count() - 1),
     only_index: bool = False,
 ):
-    data_root_ = Path(argo_dir) / av2_type/ data_mode
+    data_root_ = Path(argo_dir) / av2_type / data_mode
     output_dir_ = Path(output_dir) / av2_type / data_mode
-    if only_index:
-        create_reading_index(output_dir_)
-        return
-    output_dir_.mkdir(exist_ok=True, parents=True)
-    process_logs(data_root_, output_dir_, nproc)
+    if not only_index:
+        output_dir_.mkdir(exist_ok=True, parents=True)
+        process_logs(data_root_, output_dir_, nproc)
+
     create_reading_index(output_dir_)
     if data_mode == "val" or data_mode == "test":
         create_eval_mask(data_mode, output_dir_, mask_dir)
