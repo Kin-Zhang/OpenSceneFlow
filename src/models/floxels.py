@@ -237,7 +237,8 @@ class Floxels(nn.Module):
             selected_pc1 = self.range_limit_(pc1)[0]
             pchs, pcs = {}, {}
             for i in range(1, self.num_frames - 1):
-                pchs[f'pch{i}'] = self.range_limit_(pcs_dict[f'pch{i}s'][batch_id,...])[0]
+                if f'pch{i}s' in pcs_dict:
+                    pchs[f'pch{i}'] = self.range_limit_(pcs_dict[f'pch{i}s'][batch_id,...])[0]
 
             for i in range(2, self.flow_num + 1):
                 pcs[f'pc{i}'] = self.range_limit_(pcs_dict[f'pc{i}s'][batch_id,...])[0]
