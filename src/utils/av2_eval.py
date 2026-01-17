@@ -844,8 +844,8 @@ def compute_bucketed_epe(
 ):
     storage_error_matrix = []
     # bucket_max_speed, num_buckets, distance_thresholds set is from: eval/bucketed_epe.py#L226
-    # HARCODE(Qingwen): if change it please search globally for the same value
-    speed_splits = np.concatenate([np.linspace(0, 2.0, 51), [np.inf]])
+    # NOTE(Qingwen): Use 0.5 interval for flexible coarse bin combinations (does not affect Version 2 metrics)
+    speed_splits = np.concatenate([np.linspace(0, 2.0, 51), np.arange(2.5, 5.5, 0.5), [np.inf]])
     speed_thresholds = list(zip(speed_splits, speed_splits[1:]))
 
     gt_speeds = np.linalg.norm(gt_flow, axis=-1)

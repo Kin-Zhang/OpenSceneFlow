@@ -11,7 +11,7 @@
 """
 
 import torch
-import os, sys
+import os, sys, itertools
 import numpy as np
 from typing import List, Tuple
 from tabulate import tabulate
@@ -201,8 +201,8 @@ class BucketResultMatrix:
         pass
 
 class BucketedSpeedMatrix(BucketResultMatrix):
-    def __init__(self, class_names: List[str], speed_buckets: List[Tuple[float, float]]):
-        super().__init__(class_names, speed_buckets)
+    def __init__(self, class_names: List[str], range_buckets: List[Tuple[float, float]]):
+        super().__init__(class_names, range_buckets)
 
     def get_normalized_error_matrix(self):
         error_matrix = self.epe_storage_matrix.copy()
@@ -250,11 +250,8 @@ class OfficialMetrics:
         }
 
         self.epe_3way = {
-            'EPE_FD': [],
-            'EPE_BS': [],
-            'EPE_FS': [],
-            'IoU': [],
-            'Three-way': []
+            'EPE_FD': [], 'EPE_FS': [], 'EPE_BS': [],
+            'IoU': [], 'Three-way': []
         }
 
         self.epe_ssf = {} # will be like {"0-35": {"Static": [], "Dynamic": []}, "35-50": {"Static": [], "Dynamic": []}, ...}
@@ -266,7 +263,15 @@ class OfficialMetrics:
         speed_splits = np.concatenate([np.linspace(0, 2.0, 51), [np.inf]])
         self.bucketedMatrix = BucketedSpeedMatrix(
             class_names=['BACKGROUND', 'CAR', 'OTHER_VEHICLES', 'PEDESTRIAN', 'WHEELED_VRU'],
-            speed_buckets=list(zip(speed_splits, speed_splits[1:]))
+            range_buckets=list(zip(speed_splits, speed_splits[1:]))
+        )
+
+        # Detailed bucket_edges for velocity breakdown (0.5 interval for flexible coarse bin combinations)
+        detailed_bucket_edges = np.concatenate([np.linspace(0, 2.0, 51), np.arange(2.5, 5.5, 0.5), [np.inf]])
+        detailed_speed_thresholds = list(zip(detailed_bucket_edges, detailed_bucket_edges[1:]))
+        self.detailedBucketedMatrix = BucketedSpeedMatrix(
+            class_names=['BACKGROUND', 'CAR', 'OTHER_VEHICLES', 'PEDESTRIAN', 'WHEELED_VRU'],
+            range_buckets=detailed_speed_thresholds
         )
 
         distance_split = [0, 35, 50, 75, 100, np.inf]
@@ -286,9 +291,27 @@ class OfficialMetrics:
             self.epe_3way[key].append(epe_dict[key])
 
         for item_ in bucket_dict:
-            self.bucketedMatrix.accumulate_value(
+            if item_.count == 0 or np.isfinite(item_.avg_epe) is False or np.isfinite(item_.avg_range) is False:
+                continue
+            
+            # Fill detailed matrix directly
+            self.detailedBucketedMatrix.accumulate_value(
                 item_.name,
                 item_.thresholds_range,
+                item_.avg_epe,
+                item_.avg_range,
+                item_.count,
+            )
+            
+            # For original bucketedMatrix: merge all speed >= 2.0 into (2.0, inf)
+            if item_.thresholds_range[0] >= 2.0:
+                merged_speed_tuple = (2.0, np.inf)
+            else:
+                merged_speed_tuple = item_.thresholds_range
+            
+            self.bucketedMatrix.accumulate_value(
+                item_.name,
+                merged_speed_tuple,
                 item_.avg_epe,
                 item_.avg_range,
                 item_.count,
@@ -345,10 +368,11 @@ class OfficialMetrics:
     def print(self, ssf_metrics: bool = False):
         if not self.norm_flag:
             self.normalize()
+        # Three-way EPE in cm
         printed_data = []
         for key in self.epe_3way:
-            printed_data.append([key,self.epe_3way[key]])
-        print("Version 1 Metric on EPE Three-way:")
+            printed_data.append([key, round(self.epe_3way[key] * 100, 2)])  # Convert m to cm
+        print("Version 1 Metric on EPE Three-way (cm):")
         print(tabulate(printed_data), "\n")
 
         printed_data = []
@@ -357,9 +381,127 @@ class OfficialMetrics:
         print("Version 2 Metric on Normalized Category-based:")
         print(tabulate(printed_data, headers=["Class", "Static", "Dynamic"], tablefmt='orgtbl'), "\n")
 
+        # Print velocity buckets with both EPE (cm) and NEPE
+        print("Detail Velocity Buckets:")
+        headers, rows = self.summarize_velocity_buckets(normalized=True)
+        print(tabulate(rows, headers=headers, tablefmt='orgtbl'), "\n")
+
         if ssf_metrics:
             printed_data = []
             for key in self.epe_ssf:
                 printed_data.append([key, np.around(self.epe_ssf[key]['Static'],4), np.around(self.epe_ssf[key]['Dynamic'],4), self.epe_ssf[key]["#Static"], self.epe_ssf[key]["#Dynamic"]])
             print("Version 3 Metric on EPE Distance-based:")
             print(tabulate(printed_data, headers=["Distance", "Static", "Dynamic", "#Static", "#Dynamic"], tablefmt='orgtbl'), "\n")
+
+    def get_data(self):
+        if not self.norm_flag:
+            self.normalize()
+        # concat all key in epe_3way and bucketed
+        printed_data = {key: 0 for key in itertools.chain(self.epe_3way.keys(), self.bucketed.keys())}
+        for key in self.epe_3way:
+            printed_data[key] = round(self.epe_3way[key], 6)
+        for key in self.bucketed:
+            if np.isnan(self.bucketed[key]['Dynamic']):
+                continue
+            printed_data[key] = round(self.bucketed[key]['Dynamic'], 6)
+        return printed_data
+    
+    def summarize_velocity_buckets(
+        self,
+        coarse_edges: List[float] = (0.0, 0.5, 1.0, 2.0, 2.5, 3.0, 4.0, np.inf),  # Flexible bins
+        normalized: bool = True,
+        classes: List[str] = None,
+    ):
+        """
+        Coarse velocity bucket summary (rows grouped by CLASS), plus a MEAN block.
+        Uses detailedBucketedMatrix for finer velocity breakdown.
+        Data are already ≤35m due to filtering in evaluate_leaderboard_v2().
+        Columns: Class, VelBin (m/frame), EPE(cm), NEPE, Count
+        
+        You can customize coarse_edges, e.g.:
+        - (0.0, 0.5, 1.0, 2.0, np.inf) for simple breakdown
+        - (0.0, 0.5, 1.0, 2.0, 2.5, 3.0, 3.5, 4.0, np.inf) for detailed high-speed analysis
+        - Strict containment of fine bins inside the coarse bin (no double counting).
+        - Averages are count-weighted over fine bins.
+        """
+        bm = self.detailedBucketedMatrix  # Use detailed matrix for velocity breakdown
+        if classes is None:
+            classes = bm.class_names
+
+        err_mat = bm.get_normalized_error_matrix() if normalized else bm.epe_storage_matrix
+        epe_mat = bm.epe_storage_matrix
+        cnt_mat = bm.count_storage_matrix
+
+        # Coarse bins
+        coarse_edges = np.array(coarse_edges, dtype=float)
+        assert np.all(coarse_edges[:-1] <= coarse_edges[1:])
+        coarse_bins = list(zip(coarse_edges[:-1], coarse_edges[1:]))
+
+        headers = ["Class", "VelBin (m/frame)", "EPE(cm)", "NEPE", "Count"]
+        rows = []
+
+        def agg_one_class(c_idx: int, clo: float, chi: float):
+            epe_sum = 0.0
+            cnt_sum = 0
+            nepe_sum = 0.0
+            nepe_w   = 0
+            for b_idx, (lo, hi) in enumerate(bm.range_buckets):
+                if (lo >= clo) and (hi <= chi):
+                    cnt = int(cnt_mat[c_idx, b_idx])
+                    if cnt == 0:
+                        continue
+                    epe_avg  = float(epe_mat[c_idx, b_idx])
+                    nepe_avg = err_mat[c_idx, b_idx]
+                    epe_sum += epe_avg * cnt
+                    cnt_sum += cnt
+                    if np.isfinite(nepe_avg):
+                        nepe_sum += float(nepe_avg) * cnt
+                        nepe_w   += cnt
+            if cnt_sum == 0:
+                return np.nan, np.nan, 0
+            epe_coarse  = epe_sum / cnt_sum
+            nepe_coarse = (nepe_sum / nepe_w) if nepe_w > 0 else np.nan
+            return epe_coarse, nepe_coarse, cnt_sum
+
+        for cname in classes:
+            c_idx = bm.class_names.index(cname)
+            for clo, chi in coarse_bins:
+                agg = agg_one_class(c_idx, clo, chi)
+                epe_c, nepe_c, cnt_c = agg
+                if cnt_c == 0:  # Skip rows with no data
+                    continue
+                rows.append([
+                    cname,
+                    f"[{clo:.2f},{'inf' if not np.isfinite(chi) else f'{chi:.2f}'})",
+                    (round(epe_c * 100, 2) if np.isfinite(epe_c) else np.nan),  # Convert m to cm
+                    (round(nepe_c, 6) if np.isfinite(nepe_c) else np.nan),
+                    int(cnt_c),
+                ])
+
+        for clo, chi in coarse_bins:
+            epe_sum = 0.0
+            cnt_sum = 0
+            nepe_sum = 0.0
+            nepe_w   = 0
+            for c_idx, _ in enumerate(bm.class_names):
+                agg = agg_one_class(c_idx, clo, chi)
+                epe_c, nepe_c, cnt_c = agg
+                if np.isfinite(epe_c):
+                    epe_sum += epe_c * cnt_c
+                    cnt_sum += cnt_c
+                if np.isfinite(nepe_c):
+                    nepe_sum += nepe_c * cnt_c
+                    nepe_w   += cnt_c
+            epe_mean  = (epe_sum / cnt_sum) if cnt_sum > 0 else np.nan
+            nepe_mean = (nepe_sum / nepe_w) if nepe_w > 0 else np.nan
+            if cnt_sum == 0:  # Skip rows with no data
+                continue
+            rows.append([
+                "MEAN",
+                f"[{clo:.2f},{'inf' if not np.isfinite(chi) else f'{chi:.2f}'})",
+                (round(epe_mean * 100, 2) if np.isfinite(epe_mean) else np.nan),  # Convert m to cm
+                (round(nepe_mean, 6) if np.isfinite(nepe_mean) else np.nan),
+                int(cnt_sum),
+            ])
+
+        return headers, rows

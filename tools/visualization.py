@@ -161,7 +161,7 @@ class SceneFlowVisualizer:
                 pcd = o3d.geometry.PointCloud()
                 
                 # Instance/cluster visualization
-                if single_res in ['dufo', 'cluster', 'dufocluster', 'flow_instance_id', 
+                if single_res in ['dufo', 'cluster', 'dufocluster', 'flow_instance_id', 'flow_category_indices', 
                                   'ground_mask', 'pc0_dynamic'] and single_res in data:
                     labels = data[single_res][~gm0] if self.rgm else data[single_res]
                     pcd = self._color_by_labels(pc0, labels)
