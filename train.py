@@ -12,7 +12,8 @@
 """
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import Subset
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from lightning.pytorch.callbacks import (
@@ -59,10 +60,36 @@ def main(cfg):
     pl.seed_everything(cfg.seed, workers=True)
 
     train_aug = transforms.Compose([RandomHeight(p=0.8), RandomFlip(p=0.2), RandomJitter(), ToTensor()] if cfg.get('train_aug', False) else [ToTensor()])
-    train_dataset = HDF5Dataset(cfg.train_data, 
-                    n_frames=cfg.num_frames,
-                    ssl_label=cfg.get('ssl_label', None),
-                    transform=train_aug)
+    if isinstance(cfg.train_data, list) or OmegaConf.is_list(cfg.train_data):
+        print("[LOG]: We are using multiple training data sources:", cfg.train_data)
+        datasets = []
+        
+        for idx, data_path in enumerate(cfg.train_data):
+            # Create full dataset
+            dataset = HDF5Dataset(data_path, 
+                                n_frames=cfg.num_frames,
+                                ssl_label=cfg.get('ssl_label', None),
+                                transform=train_aug)
+            
+            # Apply percentage sampling if configured
+            if 'train_percentage' in cfg and cfg.train_percentage is not None:
+                percentage = cfg.train_percentage[idx] if isinstance(cfg.train_percentage, (list, ListConfig)) else cfg.train_percentage
+                if percentage < 1.0:
+                    total_len = len(dataset)
+                    subset_len = int(total_len * percentage)
+                    indices = list(range(subset_len))
+                    dataset = Subset(dataset, indices)
+                    print(f"[LOG]: Using {percentage*100:.1f}% of data from {data_path}: {subset_len}/{total_len} samples")
+            
+            datasets.append(dataset)
+        
+        train_dataset = ConcatDataset(datasets)
+    else:    
+        train_dataset = HDF5Dataset(cfg.train_data, 
+                        n_frames=cfg.num_frames,
+                        ssl_label=cfg.get('ssl_label', None),
+                        transform=train_aug)
+        
     train_loader = DataLoader(train_dataset,
                               batch_size=cfg.batch_size,
                               shuffle=True,
