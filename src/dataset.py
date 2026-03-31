@@ -75,7 +75,7 @@ def collate_fn_pad(batch):
         flows_after_mask_ground[flow_key] = torch.nn.utils.rnn.pad_sequence(flows_after_mask_ground[flow_key], batch_first=True, padding_value=0)
         res_dict[flow_key] = flows_after_mask_ground[flow_key]
 
-    if 'ego_motion' in batch[0]:
+    if all('ego_motion' in b for b in batch):
         res_dict['ego_motion'] = [batch[i]['ego_motion'] for i in range(batch_size_)]
         
     if 'pc0_dynamic' in batch[0]:
